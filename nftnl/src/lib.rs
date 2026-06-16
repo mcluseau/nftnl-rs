@@ -69,7 +69,21 @@ pub use chain::{Chain, ChainType, Hook, Policy, Priority};
 mod rule;
 pub use rule::Rule;
 
+pub mod datatype;
+
 pub mod set;
+
+/// Maps are sets whose keys map to a data value. Re-exported from [`set::Map`]
+/// for convenience.
+pub mod map {
+    pub use crate::set::Map;
+}
+
+/// Interval (range) sets and maps. Re-exported from [`set::IntervalSet`] and
+/// [`set::IntervalMap`] for convenience.
+pub mod interval {
+    pub use crate::set::{IntervalMap, IntervalSet};
+}
 
 /// The type of the message as it's sent to netfilter. A message consists of an object, such as a
 /// [`Table`], [`Chain`] or [`Rule`] for example, and a [`MsgType`] to describe what to do with

@@ -1,6 +1,6 @@
 use std::ptr;
 
-use super::{Expression, Rule};
+use super::{Expression, Register, Rule};
 use nftnl_sys::{self as sys, libc};
 
 trait HeaderField {
@@ -60,6 +60,49 @@ impl Expression for Payload {
                 sys::NFTNL_EXPR_PAYLOAD_DREG as u16,
                 libc::NFT_REG_1 as u32,
             );
+        }
+        expr
+    }
+}
+
+/// A [`Payload`] expression with a configurable destination register.
+///
+/// Allows loading packet header fields into any register, not just `REG1`.
+/// This is needed for concatenated map lookups (e.g., `ip daddr . tcp dport`),
+/// where each field must be loaded into successive registers.
+pub struct PayloadReg {
+    inner: Payload,
+    dreg: u32,
+}
+
+impl PayloadReg {
+    pub fn new(inner: Payload) -> Self {
+        PayloadReg {
+            inner,
+            dreg: libc::NFT_REG_1 as u32,
+        }
+    }
+
+    pub fn dreg(mut self, register: Register) -> Self {
+        self.dreg = register.to_raw();
+        self
+    }
+}
+
+impl Expression for PayloadReg {
+    fn to_expr(&self, _rule: &Rule) -> ptr::NonNull<sys::nftnl_expr> {
+        let expr = try_alloc!(unsafe { sys::nftnl_expr_alloc(c"payload".as_ptr()) });
+
+        unsafe {
+            let expr = expr.as_ptr();
+            sys::nftnl_expr_set_u32(expr, sys::NFTNL_EXPR_PAYLOAD_BASE as u16, self.inner.base());
+            sys::nftnl_expr_set_u32(
+                expr,
+                sys::NFTNL_EXPR_PAYLOAD_OFFSET as u16,
+                self.inner.offset(),
+            );
+            sys::nftnl_expr_set_u32(expr, sys::NFTNL_EXPR_PAYLOAD_LEN as u16, self.inner.len());
+            sys::nftnl_expr_set_u32(expr, sys::NFTNL_EXPR_PAYLOAD_DREG as u16, self.dreg);
         }
         expr
     }
