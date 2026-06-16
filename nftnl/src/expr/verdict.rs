@@ -1,5 +1,5 @@
 use super::{Expression, Rule};
-use crate::ProtoFamily;
+use crate::{ProtoFamily, datatype::Data};
 use nftnl_sys::{self as sys, libc};
 use std::{
     ffi::{CStr, CString},
@@ -151,6 +151,39 @@ impl Expression for Verdict {
             }
         };
         unsafe { self.to_immediate_expr(immediate_const) }
+    }
+}
+
+impl Data for Verdict {
+    const TYPE: u32 = 0xffffff00; // TYPE_VERDICT
+    const LEN: u32 = 0;
+
+    fn data(&self) -> Box<[u8]> {
+        Box::new([])
+    }
+
+    fn write_elem(&self, elem: *mut sys::nftnl_set_elem) {
+        let code = match *self {
+            Verdict::Drop => libc::NF_DROP,
+            Verdict::Accept => libc::NF_ACCEPT,
+            Verdict::Queue => libc::NF_QUEUE,
+            Verdict::Continue => libc::NFT_CONTINUE,
+            Verdict::Break => libc::NFT_BREAK,
+            Verdict::Jump { .. } => libc::NFT_JUMP,
+            Verdict::Goto { .. } => libc::NFT_GOTO,
+            Verdict::Return => libc::NFT_RETURN,
+            Verdict::Reject(_) => 0,
+        } as u32;
+
+        unsafe {
+            sys::nftnl_set_elem_set_u32(elem, sys::NFTNL_SET_ELEM_VERDICT as u16, code);
+        }
+
+        if let Some(chain) = self.chain() {
+            unsafe {
+                sys::nftnl_set_elem_set_str(elem, sys::NFTNL_SET_ELEM_CHAIN as u16, chain.as_ptr());
+            }
+        }
     }
 }
 

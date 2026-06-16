@@ -69,7 +69,11 @@ pub use chain::{Chain, ChainType, Hook, Policy, Priority};
 mod rule;
 pub use rule::Rule;
 
+pub mod datatype;
+
 pub mod set;
+
+pub mod map;
 
 /// The type of the message as it's sent to netfilter. A message consists of an object, such as a
 /// [`Table`], [`Chain`] or [`Rule`] for example, and a [`MsgType`] to describe what to do with

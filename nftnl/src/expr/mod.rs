@@ -20,10 +20,27 @@ pub trait Expression {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(i32)]
 pub enum Register {
+    Verdict = libc::NFT_REG_VERDICT,
     Reg1 = libc::NFT_REG_1,
     Reg2 = libc::NFT_REG_2,
     Reg3 = libc::NFT_REG_3,
     Reg4 = libc::NFT_REG_4,
+    Reg32_00 = libc::NFT_REG32_00,
+    Reg32_01 = libc::NFT_REG32_01,
+    Reg32_02 = libc::NFT_REG32_02,
+    Reg32_03 = libc::NFT_REG32_03,
+    Reg32_04 = libc::NFT_REG32_04,
+    Reg32_05 = libc::NFT_REG32_05,
+    Reg32_06 = libc::NFT_REG32_06,
+    Reg32_07 = libc::NFT_REG32_07,
+    Reg32_08 = libc::NFT_REG32_08,
+    Reg32_09 = libc::NFT_REG32_09,
+    Reg32_10 = libc::NFT_REG32_10,
+    Reg32_11 = libc::NFT_REG32_11,
+    Reg32_12 = libc::NFT_REG32_12,
+    Reg32_13 = libc::NFT_REG32_13,
+    Reg32_14 = libc::NFT_REG32_14,
+    Reg32_15 = libc::NFT_REG32_15,
 }
 
 impl Register {
@@ -50,8 +67,14 @@ pub use self::immediate::*;
 mod lookup;
 pub use self::lookup::*;
 
+mod lookup_map;
+pub use self::lookup_map::*;
+
 mod masquerade;
 pub use self::masquerade::*;
+
+mod numgen;
+pub use self::numgen::*;
 
 mod meta;
 pub use self::meta::*;
@@ -101,8 +124,23 @@ macro_rules! nft_expr {
     (lookup $set:expr) => {
         nft_expr_lookup!($set)
     };
+    (lookup_map $map:expr $( , $sreg:expr )? => $dreg:expr) => {
+        nft_expr_lookup_map!($map $( , $sreg )? => $dreg)
+    };
     (masquerade) => {
         $crate::expr::Masquerade
+    };
+    (numgen random mod $modulus:expr) => {
+        nft_expr_numgen!(random mod $modulus)
+    };
+    (numgen random mod $modulus:expr, offset $offset:expr) => {
+        nft_expr_numgen!(random mod $modulus, offset $offset)
+    };
+    (numgen inc mod $modulus:expr) => {
+        nft_expr_numgen!(inc mod $modulus)
+    };
+    (numgen inc mod $modulus:expr, offset $offset:expr) => {
+        nft_expr_numgen!(inc mod $modulus, offset $offset)
     };
     (meta $expr:ident set) => {
         nft_expr_meta!($expr set)
@@ -112,6 +150,9 @@ macro_rules! nft_expr {
     };
     (payload $proto:ident $field:ident) => {
         nft_expr_payload!($proto $field)
+    };
+    (payload $proto:ident $field:ident => $dreg:expr) => {
+        $crate::expr::PayloadReg::new(nft_expr_payload!($proto $field)).dreg($dreg)
     };
     (payload_raw $base:ident $offset:expr, $length:expr) => {
         nft_expr_payload!($base $offset, $length)

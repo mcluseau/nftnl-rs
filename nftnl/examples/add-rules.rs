@@ -16,11 +16,15 @@
 //!         chain chain-for-outgoing-packets {
 //!                 type filter hook output priority 0; policy accept;
 //!                 ip daddr 10.1.0.0/24 counter packets 0 bytes 0 accept
+//!                 icmpv6 type nd-router-solicit icmpv6 code no-route accept
+//!                 ip ttl < 64 counter packets 0 bytes 0 accept
 //!         }
 //!
 //!         chain chain-for-incoming-packets {
 //!                 type filter hook input priority 0; policy accept;
 //!                 iif "lo" accept
+//!                 iifname "lo" accept
+//!                 ether saddr aa:bb:cc:dd:ee:ff accept
 //!         }
 //! }
 //! ```
@@ -37,7 +41,10 @@
 //! ```
 
 use ipnetwork::{IpNetwork, Ipv4Network};
-use nftnl::{Batch, Chain, FinalizedBatch, ProtoFamily, Rule, Table, nft_expr, nftnl_sys::libc};
+use nftnl::{
+    Batch, Chain, FinalizedBatch, ProtoFamily, Rule, Table, datatype::MacAddr, expr::InterfaceName,
+    nft_expr, nftnl_sys::libc,
+};
 use std::{ffi::CStr, io, net::Ipv4Addr};
 
 const TABLE_NAME: &CStr = c"example-table";
@@ -104,6 +111,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Add the rule to the batch.
     batch.add(&allow_loopback_in_rule, nftnl::MsgType::Add);
 
+    // === ADD A RULE MATCHING AN INCOMING INTERFACE BY NAME ===
+
+    let mut match_iifname = Rule::new(&in_chain);
+    match_iifname.add_expr(&nft_expr!(meta iifname));
+    match_iifname.add_expr(&nft_expr!(cmp == InterfaceName::Exact(c"lo".into())));
+    match_iifname.add_expr(&nft_expr!(verdict accept));
+    batch.add(&match_iifname, nftnl::MsgType::Add);
+
+    // === ADD A RULE MATCHING AN ETHERNET SOURCE ADDRESS ===
+
+    let mut match_mac = Rule::new(&in_chain);
+    match_mac.add_expr(&nft_expr!(meta iiftype));
+    match_mac.add_expr(&nft_expr!(cmp == 1u16));
+    match_mac.add_expr(&nft_expr!(payload ethernet saddr));
+    match_mac.add_expr(&nft_expr!(
+        cmp == MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff])
+    ));
+    match_mac.add_expr(&nft_expr!(verdict accept));
+    batch.add(&match_mac, nftnl::MsgType::Add);
+
     // === ADD A RULE ALLOWING (AND COUNTING) ALL PACKETS TO THE 10.1.0.0/24 NETWORK ===
 
     let mut block_out_to_private_net_rule = Rule::new(&out_chain);
@@ -165,6 +192,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     allow_router_solicitation.add_expr(&nft_expr!(verdict accept));
 
     batch.add(&allow_router_solicitation, nftnl::MsgType::Add);
+
+    // === ADD A RULE MATCHING A LOW TTL (IPv4) ===
+
+    let mut match_low_ttl = Rule::new(&out_chain);
+    match_low_ttl.add_expr(&nft_expr!(meta nfproto));
+    match_low_ttl.add_expr(&nft_expr!(cmp == libc::NFPROTO_IPV4 as u8));
+    match_low_ttl.add_expr(&nft_expr!(payload ipv4 ttl));
+    match_low_ttl.add_expr(&nft_expr!(cmp < 64u8));
+    match_low_ttl.add_expr(&nft_expr!(counter));
+    match_low_ttl.add_expr(&nft_expr!(verdict accept));
+    batch.add(&match_low_ttl, nftnl::MsgType::Add);
 
     // === FINALIZE THE TRANSACTION AND SEND THE DATA TO NETFILTER ===
 

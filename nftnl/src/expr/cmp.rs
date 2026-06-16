@@ -1,4 +1,5 @@
 use super::{Expression, Rule};
+use crate::datatype::MacAddr;
 use nftnl_sys::{self as sys, libc};
 use std::{
     borrow::Cow,
@@ -6,6 +7,42 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     ptr, slice,
 };
+
+/// Netfilter protocol family constant for use with `meta nfproto` cmp expressions.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[repr(u8)]
+pub enum NfProto {
+    Ipv4 = libc::NFPROTO_IPV4 as u8,
+    Ipv6 = libc::NFPROTO_IPV6 as u8,
+}
+
+impl ToSlice for NfProto {
+    fn to_slice(&self) -> Cow<'_, [u8]> {
+        Cow::Owned(vec![*self as u8])
+    }
+}
+
+/// Layer 4 protocol constant for use with `meta l4proto` cmp expressions.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[repr(u8)]
+pub enum L4Proto {
+    Tcp = libc::IPPROTO_TCP as u8,
+    Udp = libc::IPPROTO_UDP as u8,
+    Icmp = libc::IPPROTO_ICMP as u8,
+    Icmpv6 = libc::IPPROTO_ICMPV6 as u8,
+    Esp = libc::IPPROTO_ESP as u8,
+    Ah = libc::IPPROTO_AH as u8,
+    Sctp = libc::IPPROTO_SCTP as u8,
+    Udplite = libc::IPPROTO_UDPLITE as u8,
+    Dccp = libc::IPPROTO_DCCP as u8,
+    Gre = libc::IPPROTO_GRE as u8,
+}
+
+impl ToSlice for L4Proto {
+    fn to_slice(&self) -> Cow<'_, [u8]> {
+        Cow::Owned(vec![*self as u8])
+    }
+}
 
 /// Comparison operator.
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -191,6 +228,12 @@ impl ToSlice for i32 {
 impl ToSlice for &'_ CStr {
     fn to_slice(&self) -> Cow<'_, [u8]> {
         Cow::from(self.to_bytes_with_nul())
+    }
+}
+
+impl ToSlice for MacAddr {
+    fn to_slice(&self) -> Cow<'_, [u8]> {
+        Cow::Borrowed(&self.0)
     }
 }
 

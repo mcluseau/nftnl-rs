@@ -3,7 +3,6 @@ use nftnl_sys::{self as sys, libc};
 use std::{
     cell::Cell,
     ffi::{CStr, c_void},
-    net::{Ipv4Addr, Ipv6Addr},
     os::raw::c_char,
     ptr,
     rc::Rc,
@@ -243,6 +242,8 @@ unsafe impl<K> crate::NlMsg for SetElemsMsg<'_, K> {
     }
 }
 
+pub use crate::datatype::Data as SetKey;
+
 /// A netlink message that flushes all elements from a set.
 pub struct FlushSet<'a, K> {
     set: &'a Set<'a, K>,
@@ -266,43 +267,10 @@ unsafe impl<K> crate::NlMsg for FlushSet<'_, K> {
     }
 }
 
-pub trait SetKey {
-    const TYPE: u32;
-    const LEN: u32;
-
-    fn data(&self) -> Box<[u8]>;
-}
-
-impl SetKey for Ipv4Addr {
-    const TYPE: u32 = 7;
-    const LEN: u32 = 4;
-
-    fn data(&self) -> Box<[u8]> {
-        self.octets().to_vec().into_boxed_slice()
-    }
-}
-
-impl SetKey for Ipv6Addr {
-    const TYPE: u32 = 8;
-    const LEN: u32 = 16;
-
-    fn data(&self) -> Box<[u8]> {
-        self.octets().to_vec().into_boxed_slice()
-    }
-}
-
-impl SetKey for u16 {
-    const TYPE: u32 = 13;
-    const LEN: u32 = 2;
-
-    fn data(&self) -> Box<[u8]> {
-        self.to_be_bytes().to_vec().into_boxed_slice()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
 
     #[test]
     fn new_creates_anonymous_constant_set() {
