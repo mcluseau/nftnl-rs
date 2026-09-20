@@ -73,6 +73,7 @@ impl ChainType {
 pub struct Chain<'a> {
     chain: ptr::NonNull<sys::nftnl_chain>,
     table: &'a Table,
+    replace: bool,
 }
 
 // Safety: It should be safe to pass this around and *read* from it
@@ -102,8 +103,18 @@ impl<'a> Chain<'a> {
                 sys::NFTNL_CHAIN_NAME as u16,
                 name.as_ref().as_ptr(),
             );
-            Chain { chain, table }
+            Chain {
+                chain,
+                table,
+                replace: false,
+            }
         }
+    }
+
+    /// When true, adding this chain replaces an already existing chain with the same name
+    /// instead of failing. Only applies when the message type is [`MsgType::Add`].
+    pub fn set_replace(&mut self, replace: bool) {
+        self.replace = replace;
     }
 
     /// Sets the hook and priority for this chain. Without calling this method the chain well
@@ -197,7 +208,13 @@ unsafe impl crate::NlMsg for Chain<'_> {
             MsgType::Del => libc::NFT_MSG_DELCHAIN,
         };
         let flags: u16 = match msg_type {
-            MsgType::Add => (libc::NLM_F_ACK | libc::NLM_F_CREATE) as u16,
+            MsgType::Add => {
+                let mut flags = (libc::NLM_F_ACK | libc::NLM_F_CREATE) as u16;
+                if self.replace {
+                    flags |= libc::NLM_F_REPLACE as u16;
+                }
+                flags
+            }
             MsgType::Del => libc::NLM_F_ACK as u16,
         };
         let header = unsafe {
