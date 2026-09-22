@@ -43,6 +43,7 @@
 #![allow(non_camel_case_types)]
 
 pub use libc;
+pub use mnl_sys;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "nftnl-1-3-0")] {

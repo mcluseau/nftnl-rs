@@ -1,4 +1,5 @@
 use crate::datatype::{Data, increment_be};
+use crate::syswrap::{NlMsgHdr, Set as SysSet, SetElem};
 use crate::{MsgType, ProtoFamily, table::Table};
 use kind::SetKind;
 use nftnl_sys::{self as sys, libc};
@@ -65,7 +66,7 @@ macro_rules! nft_map {
 /// - [`kind::SimpleMap`]: a map of keys to data (`add(&K, &D)`).
 /// - [`kind::IntervalMap`]: a map of ranges of keys to data (`add(&K, &K, &D)`).
 pub struct Set<'a, K, Kind: SetKind = kind::SimpleSet> {
-    set: ptr::NonNull<sys::nftnl_set>,
+    set: SysSet,
     table: &'a Table,
     family: ProtoFamily,
     _marker: ::std::marker::PhantomData<(K, Kind)>,
@@ -101,27 +102,24 @@ where
         family: ProtoFamily,
         flags: u32,
     ) -> Self {
-        let set = try_alloc!(unsafe { sys::nftnl_set_alloc() });
+        let mut set = SysSet::new();
 
-        unsafe {
-            let set = set.as_ptr();
-            sys::nftnl_set_set_u32(set, sys::NFTNL_SET_FAMILY as u16, family as u32);
-            sys::nftnl_set_set_str(set, sys::NFTNL_SET_TABLE as u16, table.get_name().as_ptr());
-            sys::nftnl_set_set_str(set, sys::NFTNL_SET_NAME as u16, name.as_ptr());
-            sys::nftnl_set_set_u32(set, sys::NFTNL_SET_ID as u16, id);
+        set.set_family(family as u32);
+        set.set_table(table.get_name()).expect("setting set table");
+        set.set_name(name).expect("setting set name");
+        set.set_id(id);
 
-            if flags != 0 {
-                sys::nftnl_set_set_u32(set, sys::NFTNL_SET_FLAGS as u16, flags);
-            }
-            sys::nftnl_set_set_u32(set, sys::NFTNL_SET_KEY_TYPE as u16, K::TYPE);
-            sys::nftnl_set_set_u32(set, sys::NFTNL_SET_KEY_LEN as u16, K::LEN);
+        if flags != 0 {
+            set.set_flags(flags);
+        }
+        set.set_key_type(K::TYPE);
+        set.set_key_len(K::LEN);
 
-            if let Some(data_type) = Kind::data_type() {
-                sys::nftnl_set_set_u32(set, sys::NFTNL_SET_DATA_TYPE as u16, data_type);
-            }
-            if let Some(data_len) = Kind::data_len() {
-                sys::nftnl_set_set_u32(set, sys::NFTNL_SET_DATA_LEN as u16, data_len);
-            }
+        if let Some(data_type) = Kind::data_type() {
+            set.set_data_type(data_type);
+        }
+        if let Some(data_len) = Kind::data_len() {
+            set.set_data_len(data_len);
         }
 
         let mut s = Self {
@@ -145,18 +143,10 @@ where
             desc.push(len as u8);
         }
 
-        unsafe {
-            let set = self.set.as_ptr();
-            let flags = sys::nftnl_set_get_u32(set, sys::NFTNL_SET_FLAGS as u16);
-            sys::nftnl_set_set_u32(set, sys::NFTNL_SET_FLAGS as u16, flags | NFT_SET_CONCAT);
-
-            sys::nftnl_set_set_data(
-                set,
-                sys::NFTNL_SET_DESC_CONCAT as u16,
-                desc.as_ptr() as *const c_void,
-                desc.len() as u32,
-            );
-        }
+        self.set.set_flags(self.set.flags() | NFT_SET_CONCAT);
+        self.set
+            .set_desc_concat(&desc)
+            .expect("setting set concat descriptor");
     }
 }
 
@@ -170,7 +160,8 @@ where
     }
 
     pub fn as_ptr(&self) -> ptr::NonNull<sys::nftnl_set> {
-        self.set
+        // `syswrap::Set` is never null.
+        ptr::NonNull::new(self.set.as_ptr()).expect("set pointer is non-null")
     }
 
     pub fn get_family(&self) -> ProtoFamily {
@@ -178,14 +169,11 @@ where
     }
 
     pub fn get_name(&self) -> &CStr {
-        unsafe {
-            let ptr = sys::nftnl_set_get_str(self.set.as_ptr(), sys::NFTNL_SET_NAME as u16);
-            CStr::from_ptr(ptr)
-        }
+        self.set.name().expect("set has a name")
     }
 
     pub fn get_id(&self) -> u32 {
-        unsafe { sys::nftnl_set_get_u32(self.set.as_ptr(), sys::NFTNL_SET_ID as u16) }
+        self.set.id()
     }
 
     /// Returns a message that flushes all elements from this set.
@@ -193,41 +181,18 @@ where
         FlushSet { set: self }
     }
 
-    fn add_element(&mut self, key_data: &[u8], write_data: impl FnOnce(*mut sys::nftnl_set_elem)) {
-        unsafe {
-            let elem = try_alloc!(sys::nftnl_set_elem_alloc());
-
-            sys::nftnl_set_elem_set(
-                elem.as_ptr(),
-                sys::NFTNL_SET_ELEM_KEY as u16,
-                key_data.as_ptr() as *const c_void,
-                key_data.len() as u32,
-            );
-
-            write_data(elem.as_ptr());
-            sys::nftnl_set_elem_add(self.set.as_ptr(), elem.as_ptr());
-        }
+    fn add_element(&mut self, key_data: &[u8], write_data: impl FnOnce(&mut SetElem)) {
+        let mut elem = SetElem::new();
+        elem.set_key(key_data).expect("setting element key");
+        write_data(&mut elem);
+        self.set.elem_add(elem);
     }
 
     fn add_end(&mut self, key_data: &[u8]) {
-        unsafe {
-            let elem = try_alloc!(sys::nftnl_set_elem_alloc());
-
-            sys::nftnl_set_elem_set(
-                elem.as_ptr(),
-                sys::NFTNL_SET_ELEM_KEY as u16,
-                key_data.as_ptr() as *const c_void,
-                key_data.len() as u32,
-            );
-
-            sys::nftnl_set_elem_set_u32(
-                elem.as_ptr(),
-                sys::NFTNL_SET_ELEM_FLAGS as u16,
-                libc::NFT_SET_ELEM_INTERVAL_END as u32,
-            );
-
-            sys::nftnl_set_elem_add(self.set.as_ptr(), elem.as_ptr());
-        }
+        let mut elem = SetElem::new();
+        elem.set_key(key_data).expect("setting element key");
+        elem.set_flags(libc::NFT_SET_ELEM_INTERVAL_END as u32);
+        self.set.elem_add(elem);
     }
 }
 
@@ -272,7 +237,7 @@ where
     /// Adds a key mapping to `data`.
     pub fn add(&mut self, key: &K, data: &D) {
         let key_data = key.data();
-        self.add_element(&key_data, |elem| data.write_elem(elem));
+        self.add_element(&key_data, |elem| data.write_elem(elem.as_ptr()));
     }
 }
 
@@ -285,7 +250,7 @@ where
     pub fn add(&mut self, from: &K, to: &K, data: &D) {
         let from = from.data();
         let to = to.data();
-        self.add_element(&from, |elem| data.write_elem(elem));
+        self.add_element(&from, |elem| data.write_elem(elem.as_ptr()));
         if let Some(next) = increment_be(&to) {
             self.add_end(&next);
         }
@@ -306,33 +271,32 @@ where
             MsgType::Add => libc::NFT_MSG_NEWSET,
             MsgType::Del => libc::NFT_MSG_DELSET,
         };
-        let header = unsafe {
-            sys::nftnl_nlmsg_build_hdr(
-                buf.cast::<c_char>(),
-                type_ as u16,
-                self.table.get_family() as u16,
-                (libc::NLM_F_APPEND | libc::NLM_F_CREATE | libc::NLM_F_ACK) as u16,
-                seq,
-            )
-        };
-        unsafe { sys::nftnl_set_nlmsg_build_payload(header, self.set.as_ptr()) };
-    }
-}
-
-impl<K, Kind> Drop for Set<'_, K, Kind>
-where
-    Kind: SetKind,
-{
-    fn drop(&mut self) {
-        unsafe { sys::nftnl_set_free(self.set.as_ptr()) };
+        let header = NlMsgHdr::<()>::build(
+            buf.cast::<c_char>(),
+            type_ as u16,
+            self.table.get_family() as u16,
+            (libc::NLM_F_APPEND | libc::NLM_F_CREATE | libc::NLM_F_ACK) as u16,
+            seq,
+        );
+        self.set.nlmsg_build_payload(header.as_ptr());
     }
 }
 
 // -- iterator ----------------------------------------------------------------
 
+/// Iterates the elements of a set, yielding one [`SetElemsMsg`] per netlink
+/// message needed to carry all elements.
+///
+/// The packing is done here in Rust rather than through libnftnl's
+/// `nftnl_set_elems_nlmsg_build_payload_iter` because that function rewinds only
+/// a single element on 16-bit attribute overflow, which can tear an interval
+/// (`start`, `INTERVAL_END`) pair across two messages. The kernel then rejects
+/// the transaction. The loop below mirrors what `nft` does: an overflowing
+/// interval pair is rewound as a unit, so both endpoints always travel together.
 pub struct SetElemsIter<'a, K, Kind: SetKind> {
     set: &'a Set<'a, K, Kind>,
-    iter: ptr::NonNull<sys::nftnl_set_elems_iter>,
+    elems: Rc<Vec<SetElem>>,
+    next: Rc<Cell<usize>>,
     ret: Rc<Cell<i32>>,
 }
 
@@ -341,10 +305,10 @@ where
     Kind: SetKind,
 {
     fn new(set: &'a Set<'a, K, Kind>) -> Self {
-        let iter = try_alloc!(unsafe { sys::nftnl_set_elems_iter_create(set.set.as_ptr()) });
         SetElemsIter {
             set,
-            iter,
+            elems: Rc::new(set.set.elems()),
+            next: Rc::new(Cell::new(0)),
             ret: Rc::new(Cell::new(1)),
         }
     }
@@ -358,34 +322,25 @@ where
     type Item = SetElemsMsg<'a, K, Kind>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.ret.get() <= 0
-            || unsafe { sys::nftnl_set_elems_iter_cur(self.iter.as_ptr()).is_null() }
-        {
+        if self.ret.get() <= 0 || self.next.get() >= self.elems.len() {
             trace!("SetElemsIter iterator ending");
             None
         } else {
             trace!("SetElemsIter returning new SetElemsMsg");
             Some(SetElemsMsg {
                 set: self.set,
-                iter: self.iter.as_ptr(),
+                elems: self.elems.clone(),
+                next: self.next.clone(),
                 ret: self.ret.clone(),
             })
         }
     }
 }
 
-impl<K, Kind> Drop for SetElemsIter<'_, K, Kind>
-where
-    Kind: SetKind,
-{
-    fn drop(&mut self) {
-        unsafe { sys::nftnl_set_elems_iter_destroy(self.iter.as_ptr()) };
-    }
-}
-
 pub struct SetElemsMsg<'a, K, Kind: SetKind> {
     set: &'a Set<'a, K, Kind>,
-    iter: *mut sys::nftnl_set_elems_iter,
+    elems: Rc<Vec<SetElem>>,
+    next: Rc<Cell<usize>>,
     ret: Rc<Cell<i32>>,
 }
 
@@ -402,17 +357,71 @@ where
             ),
             MsgType::Del => (libc::NFT_MSG_DELSETELEM, libc::NLM_F_ACK),
         };
-        let header = unsafe {
-            sys::nftnl_nlmsg_build_hdr(
-                buf.cast::<c_char>(),
-                type_ as u16,
-                self.set.get_family() as u16,
-                flags as u16,
-                seq,
-            )
-        };
-        self.ret
-            .set(unsafe { sys::nftnl_set_elems_nlmsg_build_payload_iter(header, self.iter) });
+        let mut nlh = NlMsgHdr::build(
+            buf.cast::<c_char>(),
+            type_ as u16,
+            self.set.get_family() as u16,
+            flags as u16,
+            seq,
+        );
+
+        let set = &self.set.set;
+        if let Some(name) = set.name() {
+            nlh.set_name(name);
+        }
+        if set.is_set(sys::NFTNL_SET_ID as u16) {
+            nlh.set_id(set.id());
+        }
+        if let Some(table) = set.table() {
+            nlh.set_table(table);
+        }
+
+        let mut idx = self.next.get();
+        let len = self.elems.len();
+        if idx >= len {
+            self.ret.set(0);
+            return;
+        }
+
+        let mut overflow = false;
+
+        let mut elements = nlh.start_elements();
+
+        // Length of the last element committed to this message, so an
+        // interval-end overflow can also undo its interval-start sibling.
+        let mut prev_len: Option<u16> = None;
+
+        while idx < len {
+            let elem = &self.elems[idx];
+            let is_interval_end = elem.is_interval_end();
+
+            let elem_len = elements.push(elem);
+
+            if elements.len_so_far() > u16::MAX as usize {
+                // The `NFTA_SET_ELEM_LIST_ELEMENTS` nest is a 16-bit length
+                // attribute. Undo the element that did not fit.
+                elements.shrink(elem_len as u32);
+                if is_interval_end {
+                    // Its interval-start sibling was already written into
+                    // this same message; rewind that too so the pair is
+                    // emitted together in the next message.
+                    if let Some(plen) = prev_len {
+                        elements.shrink(plen as u32);
+                        idx -= 1;
+                    }
+                }
+                overflow = true;
+                break;
+            }
+
+            prev_len = (!is_interval_end).then_some(elem_len);
+            idx += 1;
+        }
+
+        elements.end();
+
+        self.next.set(idx);
+        self.ret.set(overflow as i32);
     }
 }
 
@@ -429,24 +438,21 @@ where
 {
     unsafe fn write(&self, buf: *mut c_void, seq: u32, _msg_type: MsgType) {
         trace!("Writing FlushSet to NlMsg");
-        let header = unsafe {
-            sys::nftnl_nlmsg_build_hdr(
-                buf.cast::<c_char>(),
-                libc::NFT_MSG_DELSETELEM as u16,
-                self.set.get_family() as u16,
-                libc::NLM_F_ACK as u16,
-                seq,
-            )
-        };
-        unsafe {
-            sys::nftnl_set_elems_nlmsg_build_payload(header, self.set.set.as_ptr());
-        }
+        let header = NlMsgHdr::<()>::build(
+            buf.cast::<c_char>(),
+            libc::NFT_MSG_DELSETELEM as u16,
+            self.set.get_family() as u16,
+            libc::NLM_F_ACK as u16,
+            seq,
+        );
+        self.set.set.elems_nlmsg_build_payload(header.as_ptr());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::syswrap::SetElemListAttr;
     use std::net::Ipv4Addr;
 
     #[test]
@@ -695,6 +701,115 @@ mod tests {
             out.push((key, data_attr, flag));
         }
         1
+    }
+
+    /// Parses one NEWSETELEM message and asserts that every interval start is
+    /// immediately followed by its `INTERVAL_END` sibling within the same
+    /// message, and that no message ends on a dangling start.
+    fn assert_interval_pairs_intact(msg: &[u8]) {
+        const NLMSG_HDRLEN: usize = 16;
+        // `nftnl_nlmsg_build_hdr` prepends an `nfgenmsg` (family, version, res_id).
+        const NFGENMSG_LEN: usize = 4;
+        const NLA_HDRLEN: usize = 4;
+        const NLA_TYPE_MASK: u16 = 0x3fff;
+
+        fn nla_type(attr: *const libc::nlattr) -> u16 {
+            (unsafe { (*attr).nla_type }) & NLA_TYPE_MASK
+        }
+        fn nla_len(attr: *const libc::nlattr) -> usize {
+            (unsafe { (*attr).nla_len }) as usize
+        }
+        fn attrs(buf: &[u8]) -> Vec<(*const libc::nlattr, usize)> {
+            let mut out = Vec::new();
+            let mut off = 0usize;
+            while off + NLA_HDRLEN <= buf.len() {
+                let attr = buf[off..].as_ptr().cast::<libc::nlattr>();
+                let len = nla_len(attr);
+                if len < NLA_HDRLEN || off + len > buf.len() {
+                    break;
+                }
+                out.push((attr, off));
+                off += (len + 3) & !3;
+            }
+            out
+        }
+
+        // Locate NFTA_SET_ELEM_LIST_ELEMENTS.
+        let payload = &msg[NLMSG_HDRLEN + NFGENMSG_LEN..];
+        let elements = attrs(payload)
+            .into_iter()
+            .find(|&(attr, _)| nla_type(attr) == SetElemListAttr::Elements as u16)
+            .map(|(attr, off)| &payload[off + NLA_HDRLEN..off + nla_len(attr)])
+            .expect("NFTA_SET_ELEM_LIST_ELEMENTS present");
+
+        let mut pending_start = false;
+        for (elem_attr, off) in attrs(elements) {
+            let elem_body = &elements[off + NLA_HDRLEN..off + nla_len(elem_attr)];
+
+            let is_end = attrs(elem_body)
+                .into_iter()
+                .find(|&(attr, _)| nla_type(attr) == 3)
+                .map(|(attr, aoff)| {
+                    u32::from_be_bytes(
+                        elem_body[aoff + NLA_HDRLEN..aoff + nla_len(attr)]
+                            .try_into()
+                            .expect("flags attribute is 4 bytes"),
+                    )
+                })
+                .map(|flags| flags & libc::NFT_SET_ELEM_INTERVAL_END as u32 != 0)
+                .unwrap_or(false);
+
+            if is_end {
+                assert!(
+                    pending_start,
+                    "interval-end element without its start in the same message"
+                );
+                pending_start = false;
+            } else {
+                assert!(
+                    !pending_start,
+                    "interval-start not immediately followed by its end in the same message"
+                );
+                pending_start = true;
+            }
+        }
+        assert!(
+            !pending_start,
+            "message ends with an interval-start whose end is in another message"
+        );
+    }
+
+    #[test]
+    fn interval_pairs_are_never_split_across_messages() {
+        use crate::NlMsg;
+
+        let table = Table::new(c"filter", ProtoFamily::Ipv4);
+        let mut set = IntervalSet::<Ipv4Addr>::new(c"test", 1, &table, ProtoFamily::Ipv4);
+
+        // Enough ranges that the 16-bit NFTA_SET_ELEM_LIST_ELEMENTS nest must be
+        // split across several NEWSETELEM messages.
+        for i in 0..4000u32 {
+            let base = i << 8;
+            set.add(&Ipv4Addr::from(base), &Ipv4Addr::from(base | 0x7f));
+        }
+
+        let mut messages = 0usize;
+        for msg in set.elems_iter() {
+            let mut buf = vec![0u8; crate::nft_nlmsg_maxsize() as usize];
+            unsafe {
+                msg.write(buf.as_mut_ptr().cast(), 1, MsgType::Add);
+            }
+            let nlh = unsafe { &*buf.as_ptr().cast::<libc::nlmsghdr>() };
+            let len = nlh.nlmsg_len as usize;
+            assert!(len >= 16 && len <= buf.len());
+            assert_interval_pairs_intact(&buf[..len]);
+            messages += 1;
+        }
+
+        assert!(
+            messages >= 2,
+            "expected the set to span multiple NEWSETELEM messages, got {messages}"
+        );
     }
 }
 
